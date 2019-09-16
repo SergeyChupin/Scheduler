@@ -16,6 +16,7 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -158,11 +159,16 @@ public class Scheduler extends Thread {
 
     private static class ScheduledTask<V> extends FutureTask<V> implements Comparable<ScheduledTask> {
 
+        private final static AtomicLong seq = new AtomicLong();
+
         private final long time;
+
+        private final long seqNum;
 
         private ScheduledTask(long time, Callable<V> callable) {
             super(callable);
             this.time = time;
+            this.seqNum = seq.getAndIncrement();
         }
 
         private long getTime() {
@@ -171,7 +177,11 @@ public class Scheduler extends Thread {
 
         @Override
         public int compareTo(ScheduledTask task) {
-            return Long.compare(time, task.getTime());
+            int res = Long.compare(time, task.time);
+            if (res == 0) {
+                res = seqNum < task.seqNum ? -1 : 1;
+            }
+            return res;
         }
     }
 
