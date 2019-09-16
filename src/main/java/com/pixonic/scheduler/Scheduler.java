@@ -32,9 +32,9 @@ public class Scheduler extends Thread {
 
     private volatile boolean shutdown;
 
-    private final Object waitLock;
+    private volatile long nextScheduledTime;
 
-    private long nextScheduledTime;
+    private final Object waitLock;
 
     public Scheduler(int workersCount) {
         this(workersCount, new SchedulerThreadFactory());
