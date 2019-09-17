@@ -1,24 +1,23 @@
 package com.pixonic.scheduler;
 
 import com.pixonic.scheduler.utils.LocalDateTimeUtils;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.Objects;
-import java.util.Queue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 public class Scheduler extends Thread {
 
@@ -26,15 +25,13 @@ public class Scheduler extends Thread {
 
     private final PriorityBlockingQueue<ScheduledTask> scheduledTasksQueue;
 
-    private final Queue<ScheduledTask> workersQueue;
+    private final BlockingQueue<ScheduledTask> workersQueue;
 
     private final Collection<Thread> threadPool;
 
     private volatile boolean shutdown;
 
     private volatile long nextScheduledTime;
-
-    private final Object waitLock;
 
     public Scheduler(int workersCount) {
         this(workersCount, new SchedulerThreadFactory());
@@ -44,8 +41,7 @@ public class Scheduler extends Thread {
         this.shutdown = false;
         this.nextScheduledTime = Long.MAX_VALUE;
         this.scheduledTasksQueue = new PriorityBlockingQueue<>();
-        this.workersQueue = new ConcurrentLinkedQueue<>();
-        this.waitLock = new Object();
+        this.workersQueue = new LinkedBlockingQueue<>();
         this.threadPool = IntStream.range(0, workersCount)
                 .mapToObj(__ -> createWorkerThread(threadFactory))
                 .peek(Thread::start)
@@ -110,9 +106,6 @@ public class Scheduler extends Thread {
             log.info("Execute task on {}", LocalDateTimeUtils.fromMillis(scheduledTask.getTime(), ZoneOffset.systemDefault()));
         }
         workersQueue.add(scheduledTask);
-        synchronized (waitLock) {
-            waitLock.notify();
-        }
     }
 
     private void scheduleTask(ScheduledTask scheduledTask) {
@@ -138,16 +131,11 @@ public class Scheduler extends Thread {
             log.debug("Worker task started");
             try {
                 while (!Thread.interrupted() && !isShutdown()) {
-                    synchronized (waitLock) {
-                        waitLock.wait();
+                    ScheduledTask scheduledTask = workersQueue.take();
+                    if (log.isInfoEnabled()) {
+                        log.info("Process task on {}", LocalDateTimeUtils.fromMillis(scheduledTask.getTime(), ZoneOffset.systemDefault()));
                     }
-                    ScheduledTask scheduledTask = workersQueue.poll();
-                    if (scheduledTask != null) {
-                        if (log.isInfoEnabled()) {
-                            log.info("Process task on {}", LocalDateTimeUtils.fromMillis(scheduledTask.getTime(), ZoneOffset.systemDefault()));
-                        }
-                        scheduledTask.run();
-                    }
+                    scheduledTask.run();
                 }
             } catch (InterruptedException e) {
                 // nop
