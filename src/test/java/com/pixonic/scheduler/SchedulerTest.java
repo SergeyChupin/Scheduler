@@ -72,14 +72,14 @@ public class SchedulerTest {
             });
         }
 
-        CountDownLatch finishedScheduledTasks = new CountDownLatch(maxScheduledTasks);
+        CountDownLatch scheduledTasks = new CountDownLatch(maxScheduledTasks);
         new Thread(() -> {
             while (true) {
                 for (Iterator<Future> iterator = tasks.iterator(); iterator.hasNext(); ) {
                     Future task = iterator.next();
                     if (task.isDone()) {
                         iterator.remove();
-                        finishedScheduledTasks.countDown();
+                        scheduledTasks.countDown();
                     }
                 }
                 try {
@@ -89,9 +89,9 @@ public class SchedulerTest {
                 }
             }
         }).start();
-        finishedScheduledTasks.await(120, TimeUnit.SECONDS);
+        scheduledTasks.await(120, TimeUnit.SECONDS);
 
-        Assert.assertEquals(0, finishedScheduledTasks.getCount());
+        Assert.assertEquals(0, scheduledTasks.getCount());
     }
 
     private static LocalDateTime randomScheduledTime() {
