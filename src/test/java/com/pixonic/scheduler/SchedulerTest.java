@@ -3,16 +3,21 @@ package com.pixonic.scheduler;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 import junit.framework.Assert;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -36,34 +41,45 @@ public class SchedulerTest {
     @Parameterized.Parameter(2)
     public WorkFactory<?> workFactory;
 
-    @Test
-    public void baseTest() throws Exception {
-        Scheduler scheduler = new Scheduler(Runtime.getRuntime().availableProcessors());
+    private Scheduler scheduler;
 
-        Consumer<Runnable> submitter;
+    private ExecutorService executor;
+
+    @Before
+    public void beforeUp() {
+        scheduler = new Scheduler(Runtime.getRuntime().availableProcessors());
+
         if (maxProducers > 1) {
-            ExecutorService executor = Executors.newFixedThreadPool(maxProducers);
-            submitter = executor::submit;
+            executor = Executors.newFixedThreadPool(maxProducers);
         } else {
-            submitter = this::call;
+            executor = new CurrentThreadExecutor();
         }
+    }
 
+    @After
+    public void afterDown() {
+        executor.shutdown();
+        scheduler.shutdown();
+    }
+
+    @Test(timeout = 120_000)
+    public void baseTest() throws Exception {
         ConcurrentLinkedQueue<Future> tasks = new ConcurrentLinkedQueue<>();
         for (int i = 0; i < maxScheduledTasks; i++) {
-            submitter.accept(() -> {
+            executor.submit(() -> {
                 Future task = scheduler.submit(randomScheduledTime(), workFactory.createWork());
                 tasks.add(task);
             });
         }
 
-        CountDownLatch latch = new CountDownLatch(maxScheduledTasks);
+        CountDownLatch finishedScheduledTasks = new CountDownLatch(maxScheduledTasks);
         new Thread(() -> {
             while (true) {
                 for (Iterator<Future> iterator = tasks.iterator(); iterator.hasNext(); ) {
                     Future task = iterator.next();
                     if (task.isDone()) {
-                        latch.countDown();
                         iterator.remove();
+                        finishedScheduledTasks.countDown();
                     }
                 }
                 try {
@@ -73,23 +89,45 @@ public class SchedulerTest {
                 }
             }
         }).start();
-        latch.await(120, TimeUnit.SECONDS);
+        finishedScheduledTasks.await(120, TimeUnit.SECONDS);
 
-        scheduler.shutdown();
-
-        Assert.assertEquals(0, latch.getCount());
-    }
-
-    private void call(Runnable work) {
-        try {
-            work.run();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        Assert.assertEquals(0, finishedScheduledTasks.getCount());
     }
 
     private static LocalDateTime randomScheduledTime() {
-        return LocalDateTime.now().plusSeconds((long) Math.floor(10 * Math.random()));
+        return LocalDateTime.now().plusSeconds(ThreadLocalRandom.current().nextInt(10));
+    }
+
+    public static class CurrentThreadExecutor extends AbstractExecutorService {
+
+        public void execute(Runnable r) {
+            r.run();
+        }
+
+        @Override
+        public void shutdown() {
+            // nop
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return Collections.emptyList();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return false;
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return false;
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) {
+            return false;
+        }
     }
 
     private interface WorkFactory<V> {
