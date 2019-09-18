@@ -61,6 +61,7 @@ public class Scheduler extends Thread {
                 } else {
                     log.debug("Return schedule task to queue");
                     scheduledTasksQueue.add(scheduledTask);
+                    nextScheduledTime = scheduledTask.getTime();
                     synchronized (this) {
                         this.wait(timeout);
                     }
