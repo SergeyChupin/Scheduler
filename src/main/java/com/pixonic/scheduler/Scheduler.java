@@ -5,12 +5,12 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.Objects;
+import java.util.PriorityQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -23,7 +23,7 @@ public class Scheduler extends Thread {
 
     private final static Logger log = LogManager.getLogger(Scheduler.class);
 
-    private final PriorityBlockingQueue<ScheduledTask> scheduledTasksQueue;
+    private final PriorityQueue<ScheduledTask> scheduledTasksQueue;
 
     private final BlockingQueue<ScheduledTask> workersQueue;
 
@@ -31,7 +31,7 @@ public class Scheduler extends Thread {
 
     private volatile boolean shutdown;
 
-    private volatile long nextScheduledTime;
+    private long nextScheduledTime;
 
     public Scheduler(int workersCount) {
         this(workersCount, new SchedulerThreadFactory());
@@ -40,7 +40,7 @@ public class Scheduler extends Thread {
     public Scheduler(int workersCount, ThreadFactory threadFactory) {
         this.shutdown = false;
         this.nextScheduledTime = Long.MAX_VALUE;
-        this.scheduledTasksQueue = new PriorityBlockingQueue<>();
+        this.scheduledTasksQueue = new PriorityQueue<>();
         this.workersQueue = new LinkedBlockingQueue<>();
         this.threadPool = IntStream.range(0, workersCount)
                 .mapToObj(__ -> createWorkerThread(threadFactory))
@@ -53,18 +53,26 @@ public class Scheduler extends Thread {
     public void run() {
         log.debug("Scheduler task started");
         try {
+            ScheduledTask scheduledTask;
             while (!Thread.interrupted() && !isShutdown()) {
-                ScheduledTask scheduledTask = scheduledTasksQueue.take();
-                long timeout = scheduledTask.getTime() - System.currentTimeMillis();
-                if (timeout <= 0) {
-                    executeTask(scheduledTask);
-                } else {
-                    log.debug("Return schedule task to queue");
-                    scheduledTasksQueue.add(scheduledTask);
-                    nextScheduledTime = scheduledTask.getTime();
-                    synchronized (this) {
-                        this.wait(timeout);
+                synchronized (this) {
+                    scheduledTask = scheduledTasksQueue.peek();
+                    if (scheduledTask != null) {
+                        long timeout = scheduledTask.getTime() - System.currentTimeMillis();
+                        if (timeout <= 0) {
+                            scheduledTask = scheduledTasksQueue.poll();
+                        } else {
+                            nextScheduledTime = scheduledTask.getTime();
+                            scheduledTask = null;
+                            this.wait(timeout);
+                        }
+                    } else {
+                        nextScheduledTime = Long.MAX_VALUE;
+                        this.wait();
                     }
+                }
+                if (scheduledTask != null) {
+                    executeTask(scheduledTask);
                 }
             }
         } catch (InterruptedException e) {
@@ -113,9 +121,9 @@ public class Scheduler extends Thread {
         if (log.isInfoEnabled()) {
             log.info("Schedule task on {}", LocalDateTimeUtils.fromMillis(scheduledTask.getTime(), ZoneOffset.systemDefault()));
         }
-        scheduledTasksQueue.add(scheduledTask);
-        if (scheduledTask.getTime() < nextScheduledTime) {
-            synchronized (this) {
+        synchronized (this) {
+            scheduledTasksQueue.add(scheduledTask);
+            if (scheduledTask.getTime() < nextScheduledTime) {
                 this.notify();
             }
         }
